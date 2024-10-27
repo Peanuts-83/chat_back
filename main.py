@@ -12,26 +12,28 @@ class ConnectionManager:
         """
         await websocket.accept()
         self.active_connections[user_id] = websocket
-        await self.send_message(f"*** Welcome user {user_id} ***", user_id)
+        await self.send_message(f"*** Welcome user {user_id} ***\n", user_id)
+        await self.broadcast(f"User {user_id} connected\n", user_id)
 
     def disconnect(self, user_id: int) -> None:
         """
         Remove connection
         """
         del self.active_connections[user_id]
+        self.broadcast(f"User {user_id} disconnected\n", user_id)
 
-    async def send_message(self, message: str, user_id: int) -> None:
+    async def send_message(self, message: str, to_id: int, from_id: int|None = None) -> None:
         """
         1 to 1 msg
         """
-        await self.active_connections[user_id].send_text(message)
+        await self.active_connections[to_id].send_json({"msg":message, "from": from_id})
 
     async def broadcast(self, message: str, user_id: int) -> None:
         """
         Broadcast msg for all but the sender
         """
-        for connection in map(lambda item: item[1], filter(lambda item: item[0]!=user_id ,self.active_connections.items())):
-            await connection.send_text(message)
+        for connection in list(map(lambda item: item[1], filter(lambda item: item[0]!=user_id ,self.active_connections.items()))):
+            await self.send_message(message, int(connection.path_params['user_id']), user_id)
 
 manager = ConnectionManager()
 
@@ -43,10 +45,9 @@ async def root():
 async def websocket_endpoint(websocket: WebSocket, user_id: int) -> None:
     await manager.connect(websocket, user_id)
     try:
-        await manager.broadcast(f"User {user_id} connected", user_id)
         while True:
             data = await websocket.receive_text()
             await manager.broadcast(data, user_id)
     except WebSocketDisconnect:
         manager.disconnect(user_id)
-        await manager.broadcast(f"User {user_id} disconnected", user_id)
+        await manager.broadcast(f"User {user_id} disconnected\n", user_id)
