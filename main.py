@@ -1,6 +1,17 @@
+# For relative imports to work in Python 3.6
+import os, sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+from http.client import HTTPResponse
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from models.payload import Credentials
+
 app = FastAPI()
+
+fake_db = {
+    1: {"name": "aaa", "email": "aaa@aa.fr", "password": "pwd123", "user_id": 1},
+    2: {"name": "bbb", "email": "bbb@bb.fr", "password": "pwd456", "user_id": 2},
+}
 
 class ConnectionManager:
     def __init__(self):
@@ -10,17 +21,24 @@ class ConnectionManager:
         """
         Add connection to active_connections
         """
+        if self.isActiveConnexion(user_id):
+            await websocket.close(code=1008)
+            return
         await websocket.accept()
         self.active_connections[user_id] = websocket
         await self.send_message(f"*** Welcome user {user_id} ***\n", user_id)
         await self.broadcast(f"User {user_id} connected\n", user_id)
 
-    def disconnect(self, user_id: int) -> None:
+    def isActiveConnexion(self, user_id: int) -> bool:
+        return self.active_connections.get(user_id, False)
+
+    async def disconnect(self, user_id: int) -> None:
         """
         Remove connection
         """
+        # if self.active_connections[user_id] is not None:
+        #     await self.active_connections[user_id].close()
         del self.active_connections[user_id]
-        self.broadcast(f"User {user_id} disconnected\n", user_id)
 
     async def send_message(self, message: str, to_id: int, from_id: int|None = None) -> None:
         """
@@ -37,17 +55,44 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+
 @app.get("/")
 async def root():
     return {"msg": "Connection test OK!"}
 
+@app.post("/login")
+async def login(data: Credentials):
+    for user in fake_db.values():
+        if user["name"] == data.username and user["password"] == data.password:
+            if manager.isActiveConnexion(user["user_id"]):
+                return {"status_code": 403, "status": "ko", "user_id": user["user_id"], "msg":f"User {user["user_id"]} already connected"}
+            return {"status_code": 200, "status": "ok", "user_id": user["user_id"]}
+    return {"status_code": 401, "status": "ko", "user_id": None, "msg":f"Incorrect credentials {data}"}
+
+# @app.post("/logout")
+# async def logout(data: Credentials):
+#     """
+#     Deconnecter proprement en supprimant le websocket du client de la liste active_connections
+#     """
+
 @app.websocket("/ws/chat/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: int) -> None:
+    # user_id = authenticate(username, password)
+    # if not user_id:
+    #     await websocket.close(code=1008)
+    #     return
+
     await manager.connect(websocket, user_id)
     try:
         while True:
             data = await websocket.receive_text()
             await manager.broadcast(data, user_id)
     except WebSocketDisconnect:
-        manager.disconnect(user_id)
+        await manager.disconnect(user_id)
         await manager.broadcast(f"User {user_id} disconnected\n", user_id)
+
+# def authenticate(username: str, password: str) -> int | bool:
+#     for user in fake_db.items():
+#         if user["name"] == username and user["password"] == password:
+#             return user["id"]
+#         return False
